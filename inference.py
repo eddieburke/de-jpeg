@@ -36,7 +36,7 @@ def _get_schedule(steps: int, device: torch.device) -> DiffusionSchedule:
     return sched
 
 
-def load_model_for_inference(path, device, compile_model=False):
+def load_model_for_inference(path, device, compile_model=False, log_fn=None):
     ckpt = torch.load(path, map_location=device, weights_only=False)
     cfg = ckpt.get("model_config", {})
     args = ckpt.get("args", {})
@@ -51,7 +51,18 @@ def load_model_for_inference(path, device, compile_model=False):
     model.eval()
 
     if compile_model and hasattr(torch, "compile"):
-        model = torch.compile(model)
+        try:
+            model = torch.compile(model)
+            if log_fn:
+                log_fn("Model compiled with inductor backend")
+        except Exception:
+            try:
+                model = torch.compile(model, backend="aot_eager")
+                if log_fn:
+                    log_fn("Triton unavailable, compiled with aot_eager backend")
+            except Exception:
+                if log_fn:
+                    log_fn("torch.compile unavailable, using eager mode")
 
     return model, ckpt
 
@@ -236,7 +247,10 @@ def run_inference(args: dict, progress_callback=None, log_callback=None):
             progress_callback(5)
 
         model, ckpt = load_model_for_inference(
-            args["weights"], device, compile_model=args.get("compile", False)
+            args["weights"],
+            device,
+            compile_model=args.get("compile", False),
+            log_fn=log,
         )
 
         ckpt_args = ckpt.get("args", {})

@@ -154,8 +154,15 @@ echo     [1] Yes - CUDA-accelerated PyTorch ^(~2.4 GB^)
 echo     [2] No  - CPU-only PyTorch ^(~200 MB^)
 echo.
 choice /c 12 /n /m "Select [1] or [2] (default 2): "
-if !errorlevel! equ 1 goto :install_cuda
-if !errorlevel! equ 2 goto :install_cpu
+if !errorlevel! equ 1 (
+    set "install_cuda_flag=1"
+    goto :install_cuda
+)
+if !errorlevel! equ 2 (
+    set "install_cuda_flag=0"
+    goto :install_cpu
+)
+set "install_cuda_flag=0"
 goto :install_cpu
 
 :install_cuda
@@ -186,6 +193,33 @@ goto :deps_done
 echo.
 echo Installing remaining dependencies...
 pip install numpy Pillow PyQt6 --quiet
+
+:: ============================================================
+:: Step 4b: Install triton-windows for CUDA (torch.compile)
+:: ============================================================
+if "!install_cuda_flag!" neq "1" goto :skip_triton
+
+echo.
+echo ============================================================
+echo   Installing triton-windows for torch.compile...
+echo ============================================================
+echo.
+
+:: Detect CUDA version from installed torch
+for /f "delims=" %%i in ('python -c "import torch; print(torch.version.cuda or '')" 2^>nul') do set "CUDA_VER=%%i"
+echo Detected CUDA version: !CUDA_VER!
+
+:: Try triton-windows from PyPI (prebuilt wheel)
+pip install triton-windows --quiet
+if !errorlevel! equ 0 (
+    echo triton-windows installed successfully.
+    goto :skip_triton
+)
+
+echo triton-windows install failed. torch.compile will fall back to eager mode.
+echo.
+
+:skip_triton
 
 :: ============================================================
 :: Step 5: Verify
