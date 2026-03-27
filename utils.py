@@ -20,7 +20,14 @@ def crop_back(x: torch.Tensor, pads) -> torch.Tensor:
 
 def pil_to_tensor(img: Image.Image) -> torch.Tensor:
     img = ImageOps.exif_transpose(img).convert("RGB")
-    return torch.from_numpy(np.array(img, copy=True)).permute(2, 0, 1).float() / 255.0
+    try:
+        from torchvision.transforms.functional import to_tensor
+
+        return to_tensor(img)
+    except ImportError:
+        return (
+            torch.from_numpy(np.array(img, copy=True)).permute(2, 0, 1).float() / 255.0
+        )
 
 
 def tensor_to_pil(x: torch.Tensor) -> Image.Image:

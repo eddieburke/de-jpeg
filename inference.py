@@ -1,11 +1,9 @@
 import os
-import random
 import sys
 
 import torch
 from PIL import Image
 
-# Allow importing underhood from parent directory if needed
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from model import (
@@ -21,12 +19,24 @@ from utils import (
     make_comparison,
 )
 
+_schedule_cache: dict[int, DiffusionSchedule] = {}
+
 
 def get_device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def load_model_for_inference(path, device):
+def _get_schedule(steps: int, device: torch.device) -> DiffusionSchedule:
+    key = steps
+    cached = _schedule_cache.get(key)
+    if cached is not None and cached.sqrt_ab.device == device:
+        return cached
+    sched = DiffusionSchedule(steps, device)
+    _schedule_cache[key] = sched
+    return sched
+
+
+def load_model_for_inference(path, device, compile_model=False):
     ckpt = torch.load(path, map_location=device, weights_only=False)
     cfg = ckpt.get("model_config", {})
     args = ckpt.get("args", {})
@@ -38,7 +48,12 @@ def load_model_for_inference(path, device):
 
     state = ckpt.get("ema", {}).get("shadow", ckpt["model"])
     model.load_state_dict(state, strict=False)
-    return model.eval(), ckpt
+    model.eval()
+
+    if compile_model and hasattr(torch, "compile"):
+        model = torch.compile(model)
+
+    return model, ckpt
 
 
 def get_checkpoint_info(path):
@@ -179,15 +194,11 @@ def infer_stacked_ensemble(
     avg_pred = torch.zeros_like(img)
     avg_gate = torch.zeros(img.shape[0], 1, img.shape[2], img.shape[3], device=device)
     for i in range(num_passes):
-        sq = max(
-            1.0,
-            min(
-                100.0,
-                base_quality + (random.random() * 2 - 1) * quality_jitter
-                if num_passes > 1
-                else base_quality,
-            ),
-        )
+        if num_passes > 1:
+            jitter = (torch.rand(1).item() * 2 - 1) * quality_jitter
+            sq = max(1.0, min(100.0, base_quality + jitter))
+        else:
+            sq = base_quality
         qt = torch.tensor([sq / 100.0], device=device)
         fh, fv = use_tta and (i % 2 == 1), use_tta and (i % 4 >= 2)
         pi = img
@@ -203,10 +214,12 @@ def infer_stacked_ensemble(
         if fh:
             p, g = torch.flip(p, [3]), torch.flip(g, [3])
 
-        avg_pred += p
-        avg_gate += g
+        avg_pred.add_(p)
+        avg_gate.add_(g)
 
-    return (avg_pred / num_passes).clamp(0, 1), (avg_gate / num_passes).clamp(0, 1)
+    avg_pred.div_(num_passes).clamp_(0, 1)
+    avg_gate.div_(num_passes).clamp_(0, 1)
+    return avg_pred, avg_gate
 
 
 def run_inference(args: dict, progress_callback=None, log_callback=None):
@@ -222,7 +235,9 @@ def run_inference(args: dict, progress_callback=None, log_callback=None):
         if progress_callback:
             progress_callback(5)
 
-        model, ckpt = load_model_for_inference(args["weights"], device)
+        model, ckpt = load_model_for_inference(
+            args["weights"], device, compile_model=args.get("compile", False)
+        )
 
         ckpt_args = ckpt.get("args", {})
         effective_steps = args.get("steps", ckpt_args.get("diffusion_steps", 8))
@@ -251,7 +266,7 @@ def run_inference(args: dict, progress_callback=None, log_callback=None):
             model,
             img_t,
             float(args.get("quality", 75)),
-            DiffusionSchedule(effective_steps, device),
+            _get_schedule(effective_steps, device),
             args.get("noise", 0.05),
             args.get("tile", 0),
             args.get("overlap", 32),

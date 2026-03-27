@@ -33,16 +33,17 @@ class TimeEmbedding(nn.Module):
             nn.SiLU(),
             nn.Linear(dim * 4, dim),
         )
+        half = dim // 2
+        self.register_buffer(
+            "freq",
+            torch.exp(-math.log(10000.0) * torch.arange(half) / max(1, half - 1)),
+        )
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
-        half = self.dim // 2
-        freq = torch.exp(
-            -math.log(10000.0) * torch.arange(half, device=t.device) / max(1, half - 1)
-        )
         emb = torch.cat(
             [
-                torch.sin(t.float().unsqueeze(1) * freq),
-                torch.cos(t.float().unsqueeze(1) * freq),
+                torch.sin(t.float().unsqueeze(1) * self.freq),
+                torch.cos(t.float().unsqueeze(1) * self.freq),
             ],
             dim=1,
         )
@@ -84,13 +85,11 @@ class AttentionBlock(nn.Module):
         b, c, h, w = x.shape
         qkv = self.qkv(self.norm(x))
         q, k, v = qkv.chunk(3, dim=1)
-        q = q.view(b, c, h * w)
-        k = k.view(b, c, h * w)
-        v = v.view(b, c, h * w)
-        q = F.softmax(q, dim=-1)
-        k = F.softmax(k, dim=-2)
-        context = torch.bmm(k, v.transpose(1, 2))
-        out = torch.bmm(context, q).view(b, c, h, w)
+        q = q.view(b, c, h * w).permute(0, 2, 1)
+        k = k.view(b, c, h * w).permute(0, 2, 1)
+        v = v.view(b, c, h * w).permute(0, 2, 1)
+        out = F.scaled_dot_product_attention(q, k, v)
+        out = out.permute(0, 2, 1).contiguous().view(b, c, h, w)
         return x + self.proj(out)
 
 
@@ -158,70 +157,3 @@ class TinyJPEGRestorer(nn.Module):
             self.dec2, torch.cat([self.up2(u1, output_size=h1.shape), h1], dim=1), emb
         )
         return self.out_eps(F.silu(u2)), self.out_gate(u2)
-
-
-class TinyJPEGStudentNet(nn.Module):
-    def __init__(self, base_channels: int = 64, emb_dim: int = 192, depth: int = 3):
-        super().__init__()
-        self.base_channels, self.emb_dim, self.depth = base_channels, emb_dim, depth
-        b = base_channels
-        self.qemb = nn.Sequential(
-            nn.Linear(1, emb_dim), nn.SiLU(), nn.Linear(emb_dim, emb_dim)
-        )
-        self.in_conv = nn.Conv2d(6, b, 3, padding=1, padding_mode="reflect")
-
-        self.enc1 = nn.ModuleList([ResBlock(b, b, emb_dim) for _ in range(depth)])
-        self.down1 = nn.Conv2d(b, b * 2, 4, stride=2, padding=1)
-        self.enc2 = nn.ModuleList(
-            [ResBlock(b * 2, b * 2, emb_dim) for _ in range(depth)]
-        )
-        self.down2 = nn.Conv2d(b * 2, b * 4, 4, stride=2, padding=1)
-        self.enc3 = nn.ModuleList(
-            [ResBlock(b * 4, b * 4, emb_dim) for _ in range(depth)]
-        )
-
-        self.mid = nn.ModuleList(
-            [ResBlock(b * 4, b * 4, emb_dim) for _ in range(depth)]
-        )
-        self.mid_attn = AttentionBlock(b * 4)
-
-        self.up1 = nn.ConvTranspose2d(b * 4, b * 2, 4, stride=2, padding=1)
-        self.dec1 = nn.ModuleList(
-            [ResBlock(b * 4, b * 2, emb_dim)]
-            + [ResBlock(b * 2, b * 2, emb_dim) for _ in range(depth - 1)]
-        )
-        self.up2 = nn.ConvTranspose2d(b * 2, b, 4, stride=2, padding=1)
-        self.dec2 = nn.ModuleList(
-            [ResBlock(b * 2, b, emb_dim)]
-            + [ResBlock(b, b, emb_dim) for _ in range(depth - 1)]
-        )
-
-        self.out_eps = nn.Conv2d(b, 3, 3, padding=1, padding_mode="reflect")
-        gh = max(8, b // 2)
-        self.out_gate = nn.Sequential(
-            nn.Conv2d(b, gh, 3, padding=1, padding_mode="reflect"),
-            nn.SiLU(),
-            nn.Conv2d(gh, 1, 1),
-        )
-
-    def _run_blocks(self, blocks, x, emb):
-        for blk in blocks:
-            x = blk(x, emb)
-        return x
-
-    def forward(self, jpeg_img: torch.Tensor, q: torch.Tensor):
-        emb = self.qemb(q[:, None])
-        h_in = torch.cat([jpeg_img, jpeg_img], dim=1)
-        h1 = self._run_blocks(self.enc1, self.in_conv(h_in), emb)
-        h2 = self._run_blocks(self.enc2, self.down1(h1), emb)
-        h3 = self._run_blocks(self.enc3, self.down2(h2), emb)
-        mid = self.mid_attn(self._run_blocks(self.mid, h3, emb))
-        u1 = self._run_blocks(
-            self.dec1, torch.cat([self.up1(mid, output_size=h2.shape), h2], dim=1), emb
-        )
-        u2 = self._run_blocks(
-            self.dec2, torch.cat([self.up2(u1, output_size=h1.shape), h1], dim=1), emb
-        )
-        eps_pred = self.out_eps(F.silu(u2))
-        gate_logits = self.out_gate(u2)
-        return (jpeg_img + eps_pred).clamp(0, 1), gate_logits

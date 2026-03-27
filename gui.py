@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from PIL import Image
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal, QSize
 from PyQt6.QtGui import QPixmap, QImage, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -76,6 +76,32 @@ class InferenceWorker(QThread):
             self.finished_signal.emit(None)
 
 
+class CheckpointScanWorker(QThread):
+    found_signal = pyqtSignal(list)
+
+    def __init__(self, search_dirs):
+        super().__init__()
+        self.search_dirs = search_dirs
+
+    def run(self):
+        found = []
+        for d in self.search_dirs:
+            if not os.path.isdir(d):
+                continue
+            for root, _, files in os.walk(d):
+                for f in files:
+                    if f.endswith(".pt"):
+                        fp = os.path.join(root, f)
+                        try:
+                            sz = os.path.getsize(fp) / 1e6
+                            mt = os.path.getmtime(fp)
+                            found.append((fp, mt, f"{f} [{sz:.1f} MB]"))
+                        except OSError:
+                            pass
+        found.sort(key=lambda x: x[1], reverse=True)
+        self.found_signal.emit(found)
+
+
 class ImagePreview(QLabel):
     def __init__(self, title="Image", parent=None):
         super().__init__(parent)
@@ -87,6 +113,9 @@ class ImagePreview(QLabel):
         )
         self.setText(f"{title}\n(No image)")
         self._pixmap = None
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.timeout.connect(self._do_resize)
 
     def set_image(self, pixmap):
         self._pixmap = pixmap
@@ -103,6 +132,9 @@ class ImagePreview(QLabel):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._resize_timer.start(30)
+
+    def _do_resize(self):
         if self._pixmap and not self._pixmap.isNull():
             scaled = self._pixmap.scaled(
                 self.size(),
@@ -209,6 +241,7 @@ class InferenceGUI(QMainWindow):
         self.setStyleSheet(self._get_stylesheet())
 
         self._worker = None
+        self._scan_worker = None
         self._last_dir = str(Path.home())
         self._app_dir = os.path.dirname(os.path.abspath(__file__))
         self._output_dir = str(Path.home())
@@ -346,6 +379,8 @@ class InferenceGUI(QMainWindow):
         self.use_tta.setChecked(True)
         self.save_comparison = QCheckBox("Save Comparison Image")
         self.save_comparison.setChecked(False)
+        self.use_compile = QCheckBox("Compile Model (PyTorch 2.0+)")
+        self.use_compile.setChecked(False)
 
         ag.addWidget(self.tile_size)
         ag.addWidget(self.overlap)
@@ -353,6 +388,7 @@ class InferenceGUI(QMainWindow):
         ag.addWidget(self.q_jitter)
         ag.addWidget(self.use_tta)
         ag.addWidget(self.save_comparison)
+        ag.addWidget(self.use_compile)
         layout.addWidget(adv_group)
 
         # Run
@@ -462,36 +498,30 @@ class InferenceGUI(QMainWindow):
     def _refresh_checkpoints(self):
         self.ckpt_combo.blockSignals(True)
         self.ckpt_combo.clear()
+        self.ckpt_combo.addItem("Scanning...", None)
+        self.ckpt_combo.setEnabled(False)
+        self.ckpt_path.setEnabled(False)
 
         search_dirs = [
             self._app_dir,
             os.path.join(self._app_dir, "runs"),
             os.path.join(self._app_dir, "..", "runs"),
         ]
-        found = []
-        for d in search_dirs:
-            if not os.path.isdir(d):
-                continue
-            for root, _, files in os.walk(d):
-                for f in files:
-                    if f.endswith(".pt"):
-                        fp = os.path.join(root, f)
-                        try:
-                            sz = os.path.getsize(fp) / 1e6
-                            mt = os.path.getmtime(fp)
-                            found.append((fp, mt, f"{f} [{sz:.1f} MB]"))
-                        except OSError:
-                            pass
+        self._scan_worker = CheckpointScanWorker(search_dirs)
+        self._scan_worker.found_signal.connect(self._on_checkpoints_found)
+        self._scan_worker.start()
 
-        found.sort(key=lambda x: x[1], reverse=True)
+    def _on_checkpoints_found(self, found):
+        self.ckpt_combo.clear()
+        self.ckpt_combo.setEnabled(True)
+        self.ckpt_path.setEnabled(True)
         for fp, _, label in found:
             self.ckpt_combo.addItem(label, fp)
-
-        self.ckpt_combo.blockSignals(False)
         if found:
             self.ckpt_combo.setCurrentIndex(0)
             self.ckpt_path.setText(found[0][0])
             self._update_ckpt_info(found[0][0])
+        self._scan_worker = None
 
     def _on_ckpt_combo_changed(self, idx):
         if idx < 0:
@@ -568,6 +598,7 @@ class InferenceGUI(QMainWindow):
             "q_jitter": self.q_jitter.value(),
             "tta": self.use_tta.isChecked(),
             "save_comparison": self.save_comparison.isChecked(),
+            "compile": self.use_compile.isChecked(),
         }
 
         self.log.clear()
