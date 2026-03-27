@@ -51,20 +51,39 @@ def load_model_for_inference(path, device, compile_model=False, log_fn=None):
     model.eval()
 
     if compile_model and hasattr(torch, "compile"):
-        try:
-            model = torch.compile(model)
-            if log_fn:
-                log_fn("Model compiled with inductor backend")
-        except Exception:
-            try:
-                model = torch.compile(model, backend="aot_eager")
-                if log_fn:
-                    log_fn("Triton unavailable, compiled with aot_eager backend")
-            except Exception:
-                if log_fn:
-                    log_fn("torch.compile unavailable, using eager mode")
+        model = _try_compile(model, device, log_fn)
 
     return model, ckpt
+
+
+def _try_compile(model, device, log_fn=None):
+    dummy = torch.zeros(1, 3, 8, 8, device=device)
+    q = torch.tensor([0.5], device=device)
+    t = torch.zeros(1, dtype=torch.long, device=device)
+
+    for backend, label in [
+        (None, "inductor"),
+        ("aot_eager", "aot_eager"),
+    ]:
+        try:
+            compiled = (
+                torch.compile(model, backend=backend)
+                if backend
+                else torch.compile(model)
+            )
+            with torch.no_grad():
+                compiled(dummy, dummy, t, q)
+            if log_fn:
+                log_fn(f"Model compiled with {label} backend")
+            return compiled
+        except Exception:
+            if hasattr(torch, "_dynamo"):
+                torch._dynamo.reset()
+            continue
+
+    if log_fn:
+        log_fn("torch.compile unavailable, using eager mode")
+    return model
 
 
 def get_checkpoint_info(path):
