@@ -496,6 +496,10 @@ class InferenceGUI(QMainWindow):
             self.output_dir.setText(path)
 
     def _refresh_checkpoints(self):
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            self._scan_worker.quit()
+            self._scan_worker.wait()
+
         self.ckpt_combo.blockSignals(True)
         self.ckpt_combo.clear()
         self.ckpt_combo.addItem("Scanning...", None)
@@ -641,3 +645,12 @@ class InferenceGUI(QMainWindow):
             self._log("Inference failed.")
 
         self._worker = None
+
+    def closeEvent(self, event):
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.quit()
+            self._worker.wait(2000)
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            self._scan_worker.quit()
+            self._scan_worker.wait(2000)
+        event.accept()
