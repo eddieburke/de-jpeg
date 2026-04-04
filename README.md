@@ -2,19 +2,6 @@
 
 A GUI application for restoring JPEG-compressed images using a diffusion model approach. The tool reduces compression artifacts and enhances image quality through iterative denoising steps.
 
-## Features
-
-- **Diffusion-based Restoration**: Uses a 4-8 step diffusion process to remove JPEG artifacts
-- **Interactive GUI**: Built with PyQt6 for intuitive parameter tuning
-- **Checkpoint Management**: Easy loading and browsing of model checkpoints
-- **Tiling Support**: Process large images with memory-efficient tiling
-- **Test-Time Augmentation (TTA)**: Improves robustness through flipping ensembles
-- **Quality Control**: Adjustable JPEG quality factor and noise strength
-- **Multiple Passes**: Ensemble averaging for improved results
-- **Visualization Tools**: 
-  - Side-by-side original/restored comparison
-  - Gate map visualization (artifact heatmap)
-  - Real-time progress logging
 
 ## Installation
 
@@ -32,10 +19,6 @@ A GUI application for restoring JPEG-compressed images using a diffusion model a
 ## Usage
 
 1. Launch the application:
-   ```bash
-   python main.py
-   ```
-   Or run:
    ```bash
    run.bat
    ```
