@@ -315,8 +315,14 @@ class InferenceGUI(QMainWindow):
         self.ckpt_info_label = QLabel("No checkpoint selected")
         self.ckpt_info_label.setStyleSheet("color: #6c7086; font-size: 10px;")
         mg.addWidget(self.ckpt_info_label)
-        self.ckpt_combo.currentIndexChanged.connect(self._on_ckpt_combo_changed)
+        
+        # --- NEW EMA TOGGLE ---
+        self.use_ema = QCheckBox("Use EMA Weights (if available)")
+        self.use_ema.setChecked(True)
+        self.use_ema.setStyleSheet("color: #a6e3a1; font-weight: bold;")
+        mg.addWidget(self.use_ema)
 
+        self.ckpt_combo.currentIndexChanged.connect(self._on_ckpt_combo_changed)
         layout.addWidget(model_group)
 
         # IO settings
@@ -543,12 +549,22 @@ class InferenceGUI(QMainWindow):
             ed = cfg.get("emb_dim", "?")
             dp = cfg.get("depth", "?")
             step = info["step"]
-            ema = "Yes" if info["has_ema"] else "No"
+            has_ema = info["has_ema"]
+            
             self.ckpt_info_label.setText(
-                f"Diffusion Model | ch={bc} emb={ed} depth={dp} | step={step} | EMA: {ema}"
+                f"Diffusion Model | ch={bc} emb={ed} depth={dp} | step={step} | EMA: {'Yes' if has_ema else 'No'}"
             )
+            
+            if has_ema:
+                self.use_ema.setEnabled(True)
+                self.use_ema.setText("Use EMA Weights (Available)")
+            else:
+                self.use_ema.setEnabled(False)
+                self.use_ema.setChecked(False)
+                self.use_ema.setText("Use EMA Weights (Not Found in File)")
         else:
             self.ckpt_info_label.setText("Could not read checkpoint")
+            self.use_ema.setEnabled(False)
 
     def _toggle_gate(self, checked):
         if checked and self._result and self._result.get("gate") is not None:
@@ -593,6 +609,7 @@ class InferenceGUI(QMainWindow):
             "weights": weights,
             "input": inp,
             "output": os.path.join(out_dir, out_name),
+            "use_ema": self.use_ema.isChecked(),  # Pass EMA state to inference engine
             "quality": self.quality.value(),
             "noise": self.noise.value(),
             "steps": self.steps.value(),
