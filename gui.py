@@ -5,52 +5,17 @@ from pathlib import Path
 import numpy as np
 import torch
 from PIL import Image
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal, QSize
-from PyQt6.QtGui import QPixmap, QImage, QIcon
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QPixmap, QImage
 from PyQt6.QtWidgets import (
-    QApplication,
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QGridLayout,
-    QGroupBox,
-    QLabel,
-    QLineEdit,
-    QPushButton,
-    QComboBox,
-    QSlider,
-    QCheckBox,
-    QSpinBox,
-    QDoubleSpinBox,
-    QProgressBar,
-    QTextEdit,
-    QFileDialog,
-    QSplitter,
-    QFrame,
-    QScrollArea,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QGroupBox, QLabel, QLineEdit, QPushButton, QComboBox, 
+    QSlider, QCheckBox, QSpinBox, QProgressBar, QTextEdit, 
+    QFileDialog, QScrollArea
 )
 
 from inference import run_inference, get_checkpoint_info
-from utils import tensor_to_pil, make_heatmap_3ch, make_comparison
-
-
-IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
-
-
-def tensor_to_qpixmap(tensor, max_size=512):
-    if tensor is None:
-        return QPixmap()
-    pil_img = tensor_to_pil(tensor)
-    w, h = pil_img.size
-    if max(w, h) > max_size:
-        scale = max_size / max(w, h)
-        pil_img = pil_img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-    arr = np.array(pil_img)
-    h, w, ch = arr.shape
-    bytes_per_line = ch * w
-    qimg = QImage(arr.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-    return QPixmap.fromImage(qimg.copy())
+from utils import tensor_to_pil, make_comparison
 
 
 class InferenceWorker(QThread):
@@ -86,8 +51,7 @@ class CheckpointScanWorker(QThread):
     def run(self):
         found = []
         for d in self.search_dirs:
-            if not os.path.isdir(d):
-                continue
+            if not os.path.isdir(d): continue
             for root, _, files in os.walk(d):
                 for f in files:
                     if f.endswith(".pt"):
@@ -96,10 +60,22 @@ class CheckpointScanWorker(QThread):
                             sz = os.path.getsize(fp) / 1e6
                             mt = os.path.getmtime(fp)
                             found.append((fp, mt, f"{f} [{sz:.1f} MB]"))
-                        except OSError:
-                            pass
+                        except OSError: pass
         found.sort(key=lambda x: x[1], reverse=True)
         self.found_signal.emit(found)
+
+
+def tensor_to_qpixmap(tensor, max_size=512):
+    if tensor is None: return QPixmap()
+    pil_img = tensor_to_pil(tensor)
+    w, h = pil_img.size
+    if max(w, h) > max_size:
+        scale = max_size / max(w, h)
+        pil_img = pil_img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    arr = np.array(pil_img)
+    h, w, ch = arr.shape
+    qimg = QImage(arr.data, w, h, ch * w, QImage.Format.Format_RGB888)
+    return QPixmap.fromImage(qimg.copy())
 
 
 class ImagePreview(QLabel):
@@ -108,9 +84,7 @@ class ImagePreview(QLabel):
         self.title = title
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(256, 256)
-        self.setStyleSheet(
-            "QLabel { background-color: #1a1a2e; border: 1px solid #333; border-radius: 4px; color: #666; font-size: 12px; }"
-        )
+        self.setStyleSheet("QLabel { background-color: #1a1a2e; border: 1px solid #333; border-radius: 4px; color: #666; }")
         self.setText(f"{title}\n(No image)")
         self._pixmap = None
         self._resize_timer = QTimer(self)
@@ -120,12 +94,7 @@ class ImagePreview(QLabel):
     def set_image(self, pixmap):
         self._pixmap = pixmap
         if pixmap and not pixmap.isNull():
-            scaled = pixmap.scaled(
-                self.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            self.setPixmap(scaled)
+            self.setPixmap(pixmap.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         else:
             self.clear()
             self.setText(f"{self.title}\n(No image)")
@@ -136,112 +105,49 @@ class ImagePreview(QLabel):
 
     def _do_resize(self):
         if self._pixmap and not self._pixmap.isNull():
-            scaled = self._pixmap.scaled(
-                self.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            self.setPixmap(scaled)
+            self.setPixmap(self._pixmap.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
 
 class SliderSpinBox(QWidget):
-    def __init__(
-        self,
-        label,
-        min_val,
-        max_val,
-        default,
-        step=1,
-        is_float=False,
-        suffix="",
-        parent=None,
-    ):
+    def __init__(self, label, min_val, max_val, default, step=1, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        
+        self.lbl = QLabel(label)
+        self.lbl.setMinimumWidth(90)
+        layout.addWidget(self.lbl)
 
-        self.label_widget = QLabel(label)
-        self.label_widget.setMinimumWidth(90)
-        self.label_widget.setStyleSheet("color: #ccc; font-size: 11px;")
-        layout.addWidget(self.label_widget)
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(min_val, max_val)
+        self.slider.setValue(default)
+        self.slider.setSingleStep(step)
+        
+        self.spin = QSpinBox()
+        self.spin.setRange(min_val, max_val)
+        self.spin.setSingleStep(step)
+        self.spin.setValue(default)
 
-        self.is_float = is_float
-        self.step = step
-
-        if is_float:
-            self.slider = QSlider(Qt.Orientation.Horizontal)
-            self.slider.setRange(int(min_val / step), int(max_val / step))
-            self.slider.setValue(int(default / step))
-            self.spin = QDoubleSpinBox()
-            self.spin.setRange(min_val, max_val)
-            self.spin.setSingleStep(step)
-            self.spin.setValue(default)
-            self.spin.setDecimals(2)
-        else:
-            self.slider = QSlider(Qt.Orientation.Horizontal)
-            self.slider.setRange(min_val, max_val)
-            self.slider.setValue(default)
-            self.spin = QSpinBox()
-            self.spin.setRange(min_val, max_val)
-            self.spin.setSingleStep(step)
-            self.spin.setValue(default)
-
-        if suffix:
-            self.spin.setSuffix(suffix)
-
-        self.slider.setStyleSheet(
-            "QSlider::groove:horizontal { height: 4px; background: #333; border-radius: 2px; } QSlider::handle:horizontal { background: #5b9bd5; width: 14px; margin: -5px 0; border-radius: 7px; }"
-        )
-        self.spin.setStyleSheet(
-            "QSpinBox, QDoubleSpinBox { background: #2a2a3e; color: #ddd; border: 1px solid #444; border-radius: 3px; padding: 2px 4px; min-width: 70px; }"
-        )
-        self.spin.setMinimumWidth(80)
+        self.slider.setStyleSheet("QSlider::groove:horizontal { height: 4px; background: #333; } QSlider::handle:horizontal { background: #5b9bd5; width: 14px; margin: -5px 0; border-radius: 7px; }")
+        self.spin.setStyleSheet("QSpinBox { background: #2a2a3e; color: #ddd; border: 1px solid #444; border-radius: 3px; padding: 2px 4px; min-width: 50px; }")
 
         layout.addWidget(self.slider, 1)
         layout.addWidget(self.spin)
 
-        self.slider.valueChanged.connect(self._on_slider_changed)
-        self.spin.valueChanged.connect(self._on_spin_changed)
+        self.slider.valueChanged.connect(self.spin.setValue)
+        self.spin.valueChanged.connect(self.slider.setValue)
 
-    def _on_slider_changed(self, val):
-        if self.is_float:
-            v = val * self.step
-            self.spin.blockSignals(True)
-            self.spin.setValue(v)
-            self.spin.blockSignals(False)
-        else:
-            self.spin.blockSignals(True)
-            self.spin.setValue(val)
-            self.spin.blockSignals(False)
-
-    def _on_spin_changed(self, val):
-        if self.is_float:
-            v = int(val / self.step)
-            self.slider.blockSignals(True)
-            self.slider.setValue(v)
-            self.slider.blockSignals(False)
-        else:
-            self.slider.blockSignals(True)
-            self.slider.setValue(int(val))
-            self.slider.blockSignals(False)
-
-    def value(self):
-        return self.spin.value()
-
-    def set_value(self, val):
-        self.spin.setValue(val)
+    def value(self): return self.spin.value()
 
 
 class InferenceGUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("JPEG Restorer — Inference")
+        self.setWindowTitle("Unified JPEG Restorer — Inference")
         self.setMinimumSize(1200, 750)
         self.setStyleSheet(self._get_stylesheet())
 
-        self._worker = None
-        self._scan_worker = None
+        self._worker = self._scan_worker = self._result = None
         self._last_dir = str(Path.home())
         self._app_dir = os.path.dirname(os.path.abspath(__file__))
         self._output_dir = str(Path.home())
@@ -249,9 +155,6 @@ class InferenceGUI(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-
         main_layout.addWidget(self._build_left_panel(), 3)
         main_layout.addWidget(self._build_right_panel(), 5)
 
@@ -263,204 +166,96 @@ class InferenceGUI(QMainWindow):
             QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
             QPushButton { background-color: #313244; color: #cdd6f4; border: 1px solid #585b70; border-radius: 4px; padding: 6px 12px; }
             QPushButton:hover { background-color: #45475a; border-color: #89b4fa; }
-            QPushButton:pressed { background-color: #585b70; }
-            QPushButton:disabled { background-color: #1e1e2e; color: #585b70; border-color: #333; }
             QPushButton#run_button { background-color: #1e6640; color: #a6e3a1; border: 1px solid #3b8f5e; font-weight: bold; font-size: 13px; padding: 10px; }
             QPushButton#run_button:hover { background-color: #278550; }
-            QPushButton#run_button:disabled { background-color: #1e1e2e; color: #585b70; border-color: #333; }
             QLineEdit, QComboBox { background-color: #2a2a3e; color: #cdd6f4; border: 1px solid #585b70; border-radius: 4px; padding: 5px 8px; }
-            QLineEdit:focus, QComboBox:focus { border-color: #89b4fa; }
-            QComboBox::drop-down { border: none; padding-right: 6px; }
-            QComboBox QAbstractItemView { background-color: #2a2a3e; color: #cdd6f4; selection-background-color: #45475a; }
             QTextEdit { background-color: #11111b; color: #a6adc8; border: 1px solid #333; border-radius: 4px; font-family: 'Consolas', monospace; font-size: 11px; }
             QProgressBar { background-color: #313244; border: 1px solid #585b70; border-radius: 4px; text-align: center; color: #cdd6f4; }
             QProgressBar::chunk { background-color: #89b4fa; border-radius: 3px; }
-            QCheckBox { color: #cdd6f4; spacing: 6px; }
-            QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #585b70; border-radius: 3px; background: #2a2a3e; }
-            QCheckBox::indicator:checked { background: #89b4fa; border-color: #89b4fa; }
-            QLabel { color: #cdd6f4; }
-            QScrollArea { border: none; }
         """
 
     def _build_left_panel(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setSpacing(10)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        panel = QWidget(); layout = QVBoxLayout(panel); layout.setSpacing(10)
 
-        # Model selection
-        model_group = QGroupBox("Model")
-        mg = QVBoxLayout(model_group)
-
-        self.ckpt_combo = QComboBox()
-        self.ckpt_combo.setEditable(False)
-        self.ckpt_combo.setPlaceholderText("Select checkpoint...")
-        mg.addWidget(QLabel("Checkpoint:"))
-        mg.addWidget(self.ckpt_combo)
-
-        ckpt_row = QHBoxLayout()
-        self.ckpt_path = QLineEdit()
-        self.ckpt_path.setPlaceholderText("Path to .pt file...")
-        btn_browse_ckpt = QPushButton("Browse")
-        btn_browse_ckpt.clicked.connect(self._browse_ckpt)
-        btn_refresh = QPushButton("Refresh")
-        btn_refresh.clicked.connect(self._refresh_checkpoints)
-        ckpt_row.addWidget(self.ckpt_path, 1)
-        ckpt_row.addWidget(btn_browse_ckpt)
-        ckpt_row.addWidget(btn_refresh)
-        mg.addLayout(ckpt_row)
-
+        # Model Group
+        mg = QGroupBox("Model"); m_lay = QVBoxLayout(mg)
+        self.ckpt_combo = QComboBox(); m_lay.addWidget(self.ckpt_combo)
+        
+        row = QHBoxLayout()
+        self.ckpt_path = QLineEdit(); row.addWidget(self.ckpt_path, 1)
+        btn_brws = QPushButton("Browse"); btn_brws.clicked.connect(self._browse_ckpt); row.addWidget(btn_brws)
+        btn_ref = QPushButton("Refresh"); btn_ref.clicked.connect(self._refresh_checkpoints); row.addWidget(btn_ref)
+        m_lay.addLayout(row)
+        
         self.ckpt_info_label = QLabel("No checkpoint selected")
         self.ckpt_info_label.setStyleSheet("color: #6c7086; font-size: 10px;")
-        mg.addWidget(self.ckpt_info_label)
+        m_lay.addWidget(self.ckpt_info_label)
         
-        # --- NEW EMA TOGGLE ---
         self.use_ema = QCheckBox("Use EMA Weights (if available)")
-        self.use_ema.setChecked(True)
-        self.use_ema.setStyleSheet("color: #a6e3a1; font-weight: bold;")
-        mg.addWidget(self.use_ema)
-
+        self.use_ema.setChecked(True); self.use_ema.setStyleSheet("color: #a6e3a1; font-weight: bold;")
+        m_lay.addWidget(self.use_ema)
         self.ckpt_combo.currentIndexChanged.connect(self._on_ckpt_combo_changed)
-        layout.addWidget(model_group)
+        layout.addWidget(mg)
 
-        # IO settings
-        io_group = QGroupBox("Input / Output")
-        io = QVBoxLayout(io_group)
-
-        io.addWidget(QLabel("Input Image:"))
-        input_row = QHBoxLayout()
-        self.input_path = QLineEdit()
-        self.input_path.setPlaceholderText("Select an image file...")
-        btn_input = QPushButton("Browse")
-        btn_input.clicked.connect(self._browse_input)
-        input_row.addWidget(self.input_path, 1)
-        input_row.addWidget(btn_input)
-        io.addLayout(input_row)
-
-        io.addWidget(QLabel("Output Folder:"))
-        output_row = QHBoxLayout()
-        self.output_dir = QLineEdit(self._output_dir)
-        btn_output = QPushButton("Browse")
-        btn_output.clicked.connect(self._browse_output)
-        output_row.addWidget(self.output_dir, 1)
-        output_row.addWidget(btn_output)
-        io.addLayout(output_row)
-
-        io.addWidget(QLabel("Output filename:"))
+        # I/O Group
+        ig = QGroupBox("Input / Output"); i_lay = QVBoxLayout(ig)
+        row = QHBoxLayout(); self.input_path = QLineEdit()
+        btn_in = QPushButton("Browse"); btn_in.clicked.connect(self._browse_input)
+        row.addWidget(self.input_path, 1); row.addWidget(btn_in); i_lay.addWidget(QLabel("Input Image:")); i_lay.addLayout(row)
+        
+        row = QHBoxLayout(); self.output_dir = QLineEdit(self._output_dir)
+        btn_out = QPushButton("Browse"); btn_out.clicked.connect(self._browse_output)
+        row.addWidget(self.output_dir, 1); row.addWidget(btn_out); i_lay.addWidget(QLabel("Output Folder:")); i_lay.addLayout(row)
+        
         self.output_name = QLineEdit("restored.png")
-        io.addWidget(self.output_name)
+        i_lay.addWidget(QLabel("Output filename:")); i_lay.addWidget(self.output_name)
+        layout.addWidget(ig)
 
-        layout.addWidget(io_group)
+        # Settings Group
+        sg = QGroupBox("Restoration Settings"); s_lay = QVBoxLayout(sg)
+        self.quality = SliderSpinBox("Target Quality:", 1, 100, 75)
+        self.passes = SliderSpinBox("Ensemble Passes:", 1, 8, 1)
+        s_lay.addWidget(self.quality); s_lay.addWidget(self.passes)
+        
+        self.use_tta = QCheckBox("Use Test-Time Augmentation (TTA)"); self.use_tta.setChecked(True); s_lay.addWidget(self.use_tta)
+        self.save_comparison = QCheckBox("Save Comparison Image"); s_lay.addWidget(self.save_comparison)
+        layout.addWidget(sg)
 
-        # Diffusion parameters
-        diff_group = QGroupBox("Diffusion Parameters")
-        dg = QVBoxLayout(diff_group)
+        # Tiling Group
+        tg = QGroupBox("Tiling / VRAM Optimization"); t_lay = QVBoxLayout(tg)
+        self.use_tiling = QCheckBox("Enable Tiling"); self.use_tiling.setChecked(True); t_lay.addWidget(self.use_tiling)
+        self.tile_size = SliderSpinBox("Tile Size:", 128, 2048, 512, step=16)
+        self.overlap = SliderSpinBox("Overlap:", 0, 256, 32, step=16)
+        self.batch_size = SliderSpinBox("Tile Batch Size:", 1, 32, 4)
+        t_lay.addWidget(self.tile_size); t_lay.addWidget(self.overlap); t_lay.addWidget(self.batch_size)
+        layout.addWidget(tg)
 
-        self.quality = SliderSpinBox("Quality:", 1, 100, 75, suffix="")
-        self.noise = SliderSpinBox("Noise:", 0.0, 0.5, 0.05, step=0.01, is_float=True)
-        self.steps = SliderSpinBox("Steps:", 1, 8, 4)
-
-        dg.addWidget(self.quality)
-        dg.addWidget(self.noise)
-        dg.addWidget(self.steps)
-        layout.addWidget(diff_group)
-
-        # Advanced
-        adv_group = QGroupBox("Advanced (Ensemble)")
-        ag = QVBoxLayout(adv_group)
-
-        self.use_tiling = QCheckBox("Enable Tiling")
-        self.use_tiling.setChecked(True)
-        ag.addWidget(self.use_tiling)
-
-        self.tile_size = SliderSpinBox("Tile Size:", 128, 2048, 512)
-        self.overlap = SliderSpinBox("Overlap:", 0, 256, 32)
-        self.passes = SliderSpinBox("Passes:", 1, 8, 1)
-        self.q_jitter = SliderSpinBox(
-            "Q-Jitter:", 0.0, 10.0, 2.0, step=0.1, is_float=True
-        )
-        self.use_tta = QCheckBox("Use TTA (Flips)")
-        self.use_tta.setChecked(True)
-        self.save_comparison = QCheckBox("Save Comparison Image")
-        self.save_comparison.setChecked(False)
-        self.use_compile = QCheckBox("Compile Model (PyTorch 2.0+)")
-        self.use_compile.setChecked(False)
-
-        ag.addWidget(self.tile_size)
-        ag.addWidget(self.overlap)
-        ag.addWidget(self.passes)
-        ag.addWidget(self.q_jitter)
-        ag.addWidget(self.use_tta)
-        ag.addWidget(self.save_comparison)
-        ag.addWidget(self.use_compile)
-        layout.addWidget(adv_group)
-
-        # Run
-        self.run_button = QPushButton("Run Inference")
-        self.run_button.setObjectName("run_button")
+        # Run Section
+        self.run_button = QPushButton("Run Inference"); self.run_button.setObjectName("run_button")
         self.run_button.clicked.connect(self._run)
         layout.addWidget(self.run_button)
 
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
-        layout.addWidget(self.progress)
+        self.progress = QProgressBar(); self.progress.setRange(0, 100); layout.addWidget(self.progress)
+        self.log = QTextEdit(); self.log.setReadOnly(True); self.log.setMaximumHeight(140); layout.addWidget(self.log)
 
-        self.log = QTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumHeight(140)
-        layout.addWidget(self.log)
-
-        layout.addStretch()
-        scroll.setWidget(panel)
+        layout.addStretch(); scroll.setWidget(panel)
         return scroll
 
     def _build_right_panel(self):
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setSpacing(8)
-
-        self.title_label = QLabel("Results")
-        self.title_label.setStyleSheet(
-            "font-size: 14px; font-weight: bold; color: #89b4fa;"
-        )
-        layout.addWidget(self.title_label)
+        panel = QWidget(); layout = QVBoxLayout(panel)
+        layout.addWidget(QLabel("Results"))
 
         images = QHBoxLayout()
-
-        left_col = QVBoxLayout()
-        left_col.addWidget(QLabel("Source"))
-        self.src_preview = ImagePreview("Source")
-        left_col.addWidget(self.src_preview, 1)
-
-        right_col = QVBoxLayout()
-        right_col.addWidget(QLabel("Restored"))
-        self.pred_preview = ImagePreview("Restored")
-        right_col.addWidget(self.pred_preview, 1)
-
-        images.addLayout(left_col)
-        images.addLayout(right_col)
-        layout.addLayout(images, 1)
-
-        self.gate_check = QCheckBox("Show Gate Map (artifact heatmap)")
-        self.gate_check.toggled.connect(self._toggle_gate)
-        layout.addWidget(self.gate_check)
-
-        self.gate_preview = ImagePreview("Gate Map")
-        self.gate_preview.hide()
-        layout.addWidget(self.gate_preview, 1)
+        lc = QVBoxLayout(); lc.addWidget(QLabel("Source")); self.src_preview = ImagePreview("Source"); lc.addWidget(self.src_preview, 1)
+        rc = QVBoxLayout(); rc.addWidget(QLabel("Restored")); self.pred_preview = ImagePreview("Restored"); rc.addWidget(self.pred_preview, 1)
+        images.addLayout(lc); images.addLayout(rc); layout.addLayout(images, 1)
 
         self.comparison_check = QCheckBox("Show Comparison (Original | Restored)")
         self.comparison_check.toggled.connect(self._toggle_comparison)
         layout.addWidget(self.comparison_check)
 
-        self.comparison_preview = ImagePreview("Comparison")
-        self.comparison_preview.hide()
-        layout.addWidget(self.comparison_preview, 1)
-
-        self._result = None
+        self.comparison_preview = ImagePreview("Comparison"); self.comparison_preview.hide(); layout.addWidget(self.comparison_preview, 1)
         return panel
 
     def _log(self, msg):
@@ -468,206 +263,56 @@ class InferenceGUI(QMainWindow):
         self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
 
     def _browse_ckpt(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Checkpoint",
-            self._last_dir,
-            "PyTorch Checkpoint (*.pt);;All Files (*)",
-        )
-        if path:
-            self.ckpt_path.setText(path)
-            self._last_dir = str(Path(path).parent)
-            self._update_ckpt_info(path)
+        path, _ = QFileDialog.getOpenFileName(self, "Select Checkpoint", self._last_dir, "PyTorch Checkpoint (*.pt);;All Files (*)")
+        if path: self.ckpt_path.setText(path); self._last_dir = str(Path(path).parent); self._update_ckpt_info(path)
 
     def _browse_input(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Image",
-            self._last_dir,
-            "Images (*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff);;All Files (*)",
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Select Image", self._last_dir, "Images (*.jpg *.jpeg *.png *.webp);;All Files (*)")
         if path:
-            self.input_path.setText(path)
-            parent = str(Path(path).parent)
-            self._last_dir = parent
-            self.output_dir.setText(parent)
-            stem = Path(path).stem
-            self.output_name.setText(f"{stem}_restored.png")
+            self.input_path.setText(path); self._last_dir = str(Path(path).parent); self.output_dir.setText(self._last_dir)
+            self.output_name.setText(f"{Path(path).stem}_restored.png")
 
     def _browse_output(self):
-        path = QFileDialog.getExistingDirectory(
-            self, "Select Output Folder", self.output_dir.text()
-        )
-        if path:
-            self.output_dir.setText(path)
+        path = QFileDialog.getExistingDirectory(self, "Select Output Folder", self.output_dir.text())
+        if path: self.output_dir.setText(path)
 
     def _refresh_checkpoints(self):
-        if self._scan_worker is not None and self._scan_worker.isRunning():
-            self._scan_worker.quit()
-            self._scan_worker.wait()
-
-        self.ckpt_combo.blockSignals(True)
-        self.ckpt_combo.clear()
-        self.ckpt_combo.addItem("Scanning...", None)
-        self.ckpt_combo.setEnabled(False)
-        self.ckpt_path.setEnabled(False)
-
-        search_dirs = [
-            self._app_dir,
-            os.path.join(self._app_dir, "runs"),
-            os.path.join(self._app_dir, "..", "runs"),
-        ]
+        self.ckpt_combo.blockSignals(True); self.ckpt_combo.clear(); self.ckpt_combo.addItem("Scanning...", None)
+        search_dirs = [self._app_dir, os.path.join(self._app_dir, "runs"), os.path.join(self._app_dir, "..", "runs")]
         self._scan_worker = CheckpointScanWorker(search_dirs)
-        self._scan_worker.found_signal.connect(self._on_checkpoints_found)
-        self._scan_worker.start()
+        self._scan_worker.found_signal.connect(self._on_checkpoints_found); self._scan_worker.start()
 
     def _on_checkpoints_found(self, found):
         self.ckpt_combo.clear()
-        self.ckpt_combo.setEnabled(True)
-        self.ckpt_path.setEnabled(True)
-        for fp, _, label in found:
-            self.ckpt_combo.addItem(label, fp)
+        for fp, _, label in found: self.ckpt_combo.addItem(label, fp)
         if found:
-            self.ckpt_combo.setCurrentIndex(0)
-            self.ckpt_path.setText(found[0][0])
-            self._update_ckpt_info(found[0][0])
-        self._scan_worker = None
+            self.ckpt_combo.setCurrentIndex(0); self.ckpt_path.setText(found[0][0]); self._update_ckpt_info(found[0][0])
 
     def _on_ckpt_combo_changed(self, idx):
-        if idx < 0:
-            return
-        fp = self.ckpt_combo.itemData(idx)
-        if fp and os.path.isfile(fp):
-            self.ckpt_path.setText(fp)
-            self._update_ckpt_info(fp)
+        if idx >= 0: self.ckpt_path.setText(self.ckpt_combo.itemData(idx)); self._update_ckpt_info(self.ckpt_path.text())
 
     def _update_ckpt_info(self, path):
         info = get_checkpoint_info(path)
         if info:
-            cfg = info["model_config"]
-            bc = cfg.get("base_channels", "?")
-            ed = cfg.get("emb_dim", "?")
-            dp = cfg.get("depth", "?")
-            step = info["step"]
-            has_ema = info["has_ema"]
-            
             self.ckpt_info_label.setText(
-                f"Diffusion Model | ch={bc} emb={ed} depth={dp} | step={step} | EMA: {'Yes' if has_ema else 'No'}"
+                f"Step: {info['step']} | Arch: {info['base_channels']}ch, {info['depth']}dp | EMA: {'Yes' if info['has_ema'] else 'No'}"
             )
-            
-            if has_ema:
-                self.use_ema.setEnabled(True)
-                self.use_ema.setText("Use EMA Weights (Available)")
-            else:
-                self.use_ema.setEnabled(False)
-                self.use_ema.setChecked(False)
-                self.use_ema.setText("Use EMA Weights (Not Found in File)")
-        else:
-            self.ckpt_info_label.setText("Could not read checkpoint")
-            self.use_ema.setEnabled(False)
-
-    def _toggle_gate(self, checked):
-        if checked and self._result and self._result.get("gate") is not None:
-            gate_3ch = make_heatmap_3ch(self._result["gate"])
-            pm = tensor_to_qpixmap(gate_3ch, max_size=512)
-            self.gate_preview.set_image(pm)
-            self.gate_preview.show()
-        else:
-            self.gate_preview.hide()
+            self.use_ema.setEnabled(info["has_ema"]); self.use_ema.setChecked(info["has_ema"])
 
     def _toggle_comparison(self, checked):
         if checked and self._result:
-            comp = make_comparison(self._result["src"], self._result["pred"])
-            pm = tensor_to_qpixmap(comp, max_size=1024)
-            self.comparison_preview.set_image(pm)
-            self.comparison_preview.show()
-        else:
-            self.comparison_preview.hide()
+            comp_pm = tensor_to_qpixmap(make_comparison(self._result["src"], self._result["pred"]), max_size=1024)
+            self.comparison_preview.set_image(comp_pm); self.comparison_preview.show()
+        else: self.comparison_preview.hide()
 
     def _run(self):
-        weights = self.ckpt_path.text().strip()
-        inp = self.input_path.text().strip()
-        out_dir = self.output_dir.text().strip()
-        out_name = self.output_name.text().strip()
-
-        if not weights or not os.path.isfile(weights):
-            self._log("Error: Select a valid checkpoint file")
-            return
-        if not inp or not os.path.isfile(inp):
-            self._log("Error: Select a valid input image")
-            return
-        if not out_dir:
-            self._log("Error: Select an output directory")
-            return
-        if not out_name:
-            self._log("Error: Enter an output filename")
-            return
-
-        tile = self.tile_size.value() if self.use_tiling.isChecked() else 0
+        if not os.path.isfile(self.ckpt_path.text()): return self._log("Error: Invalid checkpoint.")
+        if not os.path.isfile(self.input_path.text()): return self._log("Error: Invalid image.")
 
         args = {
-            "weights": weights,
-            "input": inp,
-            "output": os.path.join(out_dir, out_name),
-            "use_ema": self.use_ema.isChecked(),  # Pass EMA state to inference engine
-            "quality": self.quality.value(),
-            "noise": self.noise.value(),
-            "steps": self.steps.value(),
-            "tile": tile,
-            "overlap": self.overlap.value(),
-            "passes": self.passes.value(),
-            "q_jitter": self.q_jitter.value(),
-            "tta": self.use_tta.isChecked(),
-            "save_comparison": self.save_comparison.isChecked(),
-            "compile": self.use_compile.isChecked(),
-        }
-
-        self.log.clear()
-        self.progress.setValue(0)
-        self.run_button.setEnabled(False)
-        self.run_button.setText("Running...")
-
-        self._worker = InferenceWorker(args)
-        self._worker.log_signal.connect(self._log)
-        self._worker.progress_signal.connect(self.progress.setValue)
-        self._worker.finished_signal.connect(self._on_finished)
-        self._worker.error_signal.connect(lambda e: self._log(f"Error: {e}"))
-        self._worker.start()
-
-    def _on_finished(self, result):
-        self.run_button.setEnabled(True)
-        self.run_button.setText("Run Inference")
-
-        if result:
-            self._result = result
-            src_pm = tensor_to_qpixmap(result["src"], max_size=512)
-            pred_pm = tensor_to_qpixmap(result["pred"], max_size=512)
-            self.src_preview.set_image(src_pm)
-            self.pred_preview.set_image(pred_pm)
-
-            if self.gate_check.isChecked() and result.get("gate") is not None:
-                gate_3ch = make_heatmap_3ch(result["gate"])
-                gate_pm = tensor_to_qpixmap(gate_3ch, max_size=512)
-                self.gate_preview.set_image(gate_pm)
-                self.gate_preview.show()
-
-            if self.comparison_check.isChecked():
-                comp = make_comparison(result["src"], result["pred"])
-                comp_pm = tensor_to_qpixmap(comp, max_size=1024)
-                self.comparison_preview.set_image(comp_pm)
-                self.comparison_preview.show()
-
-            self._log("Done!")
-        else:
-            self._log("Inference failed.")
-
-        self._worker = None
-
-    def closeEvent(self, event):
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.quit()
-            self._worker.wait(2000)
-        if self._scan_worker is not None and self._scan_worker.isRunning():
-            self._scan_worker.quit()
-            self._scan_worker.wait(2000)
-        event.accept()
+            "weights": self.ckpt_path.text(), "input": self.input_path.text(),
+            "output": os.path.join(self.output_dir.text(), self.output_name.text()),
+            "use_ema": self.use_ema.isChecked(), "quality": self.quality.value(),
+            "tile": self.tile_size.value() if self.use_tiling.isChecked() else 0,
+            "overlap": self.overlap.value(), "batch_size": self.batch_size.value(),
+            "passes": self.passes.valu

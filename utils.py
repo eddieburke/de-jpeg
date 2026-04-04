@@ -3,63 +3,53 @@ import torch
 import torch.nn.functional as F
 from PIL import Image, ImageOps
 
-
-def pad_to_multiple(x: torch.Tensor, m: int = 16, b: int = 0):
+def pad_to_multiple(x: torch.Tensor, m: int = 16, buffer: int = 32) -> tuple[torch.Tensor, tuple[int, int, int, int]]:
+    """
+    Pads the tensor symmetrically with a reflection buffer to avoid CNN boundary 
+    artifacts, ensuring the final dimensions are a multiple of `m`.
+    """
     h, w = x.shape[-2:]
+    
     ph = (m - h % m) % m
     pw = (m - w % m) % m
-    padded = F.pad(x, (b, pw + b, b, ph + b), mode="reflect")
-    return padded, (ph, pw, b)
+    
+    total_ph = ph + buffer * 2
+    total_pw = pw + buffer * 2
+    
+    pt = total_ph // 2
+    pb = total_ph - pt
+    pl = total_pw // 2
+    pr = total_pw - pl
+    
+    return F.pad(x, (pl, pr, pt, pb), mode="reflect"), (pt, pb, pl, pr)
 
-
-def crop_back(x: torch.Tensor, pads) -> torch.Tensor:
-    ph, pw, b = pads
-    h, w = x.shape[-2:]
-    return x[..., b : h - ph - b, b : w - pw - b]
-
+def crop_back(x: torch.Tensor, pads: tuple[int, int, int, int]) -> torch.Tensor:
+    """
+    Strips away the padding and the reflection buffer to return the original dimensions.
+    """
+    pt, pb, pl, pr = pads
+    return x[..., pt : x.shape[-2] - pb, pl : x.shape[-1] - pr]
 
 def pil_to_tensor(img: Image.Image) -> torch.Tensor:
     img = ImageOps.exif_transpose(img).convert("RGB")
-    try:
-        from torchvision.transforms.functional import to_tensor
-
-        return to_tensor(img)
-    except ImportError:
-        return (
-            torch.from_numpy(np.array(img, copy=True)).permute(2, 0, 1).float() / 255.0
-        )
-
+    return torch.from_numpy(np.array(img, copy=True)).permute(2, 0, 1).float() / 255.0
 
 def tensor_to_pil(x: torch.Tensor) -> Image.Image:
-    arr = x.detach().clamp(0, 1).mul(255).add(0.5).byte().cpu().permute(1, 2, 0).numpy()
+    arr = x.detach().clamp(0, 1).mul(255).byte().cpu().permute(1, 2, 0).numpy()
     return Image.fromarray(arr, "RGB")
 
-
 def make_comparison(original: torch.Tensor, restored: torch.Tensor) -> torch.Tensor:
-    if original.ndim == 4:
-        original = original[0]
-    if restored.ndim == 4:
-        restored = restored[0]
+    if original.ndim == 4: original = original[0]
+    if restored.ndim == 4: restored = restored[0]
+    
     _, h, w = original.shape
     _, rh, rw = restored.shape
     mh, mw = max(h, rh), w + rw
+    
     canvas = torch.zeros(3, mh, mw, device=original.device)
     canvas[:, :h, :w] = original
     canvas[:, :rh, w : w + rw] = restored
+    
     line_x = w
     canvas[:, :mh, max(0, line_x - 1) : min(mw, line_x + 1)] = 1.0
     return canvas
-
-
-def make_heatmap_3ch(x: torch.Tensor) -> torch.Tensor:
-    x = x.clamp(0, 1)
-    if x.ndim == 4:
-        x = x[0]
-    return torch.cat(
-        [
-            (1.5 * x).clamp(0, 1),
-            (1.0 - (x - 0.5).abs() * 2.0).clamp(0, 1),
-            (1.5 * (1.0 - x)).clamp(0, 1),
-        ],
-        dim=0,
-    )
