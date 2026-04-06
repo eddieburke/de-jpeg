@@ -1,5 +1,6 @@
 import os
 import sys
+import math
 import torch
 from PIL import Image
 
@@ -18,8 +19,11 @@ def get_device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def get_auto_steps(quality_val: float) -> int:
-    """ Dynamically calculates necessary EDM sampling steps based on target quality. """
-    return max(8, int(25 - (quality_val / 100.0) * 15))
+    """ 
+    Fixed to 8 steps. 
+    EDM sampling is highly efficient, and 8 steps is the standard baseline for fast, high-quality restoration.
+    """
+    return 8
 
 def detect_architecture(ckpt):
     """ Intelligently determines the model architecture from the checkpoint """
@@ -121,59 +125,95 @@ def sample_restore(model, cond, q, steps):
     return x.clamp(0, 1)
 
 @torch.no_grad()
-def infer_tiled_batched(model, img, q_tensor, steps, tile_size=512, tile_overlap=32, batch_size=4):
+def infer_tiled_batched(model, img, q_tensor, steps, tile_size=512, tile_overlap=32, batch_size=4, progress_fn=None, log_fn=None):
     b, c, h, w = img.shape
+    
+    # Enforce multiples of 16 to prevent U-Net shape mismatches
+    tile_overlap = max(0, (tile_overlap // 16) * 16)
+    if tile_size > 0:
+        tile_size = max(16, (tile_size // 16) * 16)
+        tile_overlap = min(tile_overlap, tile_size - 16)
+        
     img_pad, pads = pad_to_multiple(img, 16, buffer=tile_overlap)
     
     if tile_size <= 0 or (img_pad.shape[2] <= tile_size and img_pad.shape[3] <= tile_size):
-        return crop_back(sample_restore(model, img_pad, q_tensor, steps), pads)
+        if log_fn: log_fn("Processing as a single full image...")
+        if progress_fn: progress_fn(0, 1)
+        res = crop_back(sample_restore(model, img_pad, q_tensor, steps), pads)
+        if progress_fn: progress_fn(1, 1)
+        return res
 
-    tile_overlap = max(0, min(tile_overlap, tile_size - 1))
-    stride = max(1, tile_size - tile_overlap)
     _, _, ph, pw = img_pad.shape
+    
+    # Determine strictly constant tile dimensions
+    th = min(tile_size, ph)
+    tw = min(tile_size, pw)
+    
+    stride_y = max(16, th - tile_overlap)
+    stride_x = max(16, tw - tile_overlap)
     
     bp = torch.zeros(b, 3, ph, pw, device=img.device)
     ws = torch.zeros(b, 1, ph, pw, device=img.device)
 
-    ramp = torch.linspace(0, 1, tile_overlap, device=img.device) if tile_overlap > 0 else torch.empty(0, device=img.device)
-    ramp_flip = ramp.flip(0) if tile_overlap > 0 else torch.empty(0, device=img.device)
+    ramp_y = torch.linspace(0, 1, tile_overlap, device=img.device) if tile_overlap > 0 else None
+    ramp_y_flip = ramp_y.flip(0) if tile_overlap > 0 else None
+    ramp_x = torch.linspace(0, 1, tile_overlap, device=img.device) if tile_overlap > 0 else None
+    ramp_x_flip = ramp_x.flip(0) if tile_overlap > 0 else None
 
     coords = []
-    for y in range(0, ph, stride):
-        for x in range(0, pw, stride):
-            coords.append((y, min(ph, y + tile_size), x, min(pw, x + tile_size)))
+    # Slide safely avoiding edge truncations by shifting backwards
+    for y in range(0, ph, stride_y):
+        y_start = min(y, ph - th)
+        y_end = y_start + th
+        for x in range(0, pw, stride_x):
+            x_start = min(x, pw - tw)
+            x_end = x_start + tw
+            if (y_start, y_end, x_start, x_end) not in coords:
+                coords.append((y_start, y_end, x_start, x_end))
+
+    total_batches = math.ceil(len(coords) / batch_size)
+    if log_fn: 
+        log_fn(f"Image split into {len(coords)} tiles ({total_batches} batches to process)...")
 
     for i in range(0, len(coords), batch_size):
         batch_coords = coords[i:i+batch_size]
+        
+        # All extractions are guaranteed uniform sizes [th, tw]
         tiles = torch.cat([img_pad[:, :, y:y2, x:x2] for y, y2, x, x2 in batch_coords], dim=0)
-        qt = q_tensor.repeat(len(batch_coords), 1)
+        qt = q_tensor.repeat(len(batch_coords) * b, 1)
         
         restored_tiles = sample_restore(model, tiles, qt, steps)
 
         for j, (y, y2, x, x2) in enumerate(batch_coords):
-            tr = restored_tiles[j:j+1]
-            wh = torch.ones(y2 - y, device=img.device)
-            ww = torch.ones(x2 - x, device=img.device)
+            tr = restored_tiles[j*b:(j+1)*b]
+            
+            wh = torch.ones(th, device=img.device)
+            ww = torch.ones(tw, device=img.device)
 
             if tile_overlap > 0:
-                if y > 0: wh[:min(tile_overlap, y2 - y)] *= ramp[:min(tile_overlap, y2 - y)]
-                if y + stride < ph: wh[-(y2 - (y + stride)):] *= ramp_flip[:y2 - (y + stride)]
-                if x > 0: ww[:min(tile_overlap, x2 - x)] *= ramp[:min(tile_overlap, x2 - x)]
-                if x + stride < pw: ww[-(x2 - (x + stride)):] *= ramp_flip[:x2 - (x + stride)]
+                if y > 0: wh[:tile_overlap] *= ramp_y
+                if y2 < ph: wh[-tile_overlap:] *= ramp_y_flip
+                if x > 0: ww[:tile_overlap] *= ramp_x
+                if x2 < pw: ww[-tile_overlap:] *= ramp_x_flip
 
             win = (wh.unsqueeze(1) * ww.unsqueeze(0)).unsqueeze(0).unsqueeze(0)
             bp[:, :, y:y2, x:x2] += tr * win
             ws[:, :, y:y2, x:x2] += win
+            
+        if progress_fn:
+            progress_fn(i + len(batch_coords), len(coords))
 
     return crop_back(bp / ws.clamp(min=1e-8), pads)
 
 @torch.no_grad()
-def infer_stacked_ensemble(model, img, base_quality, tile, overlap, batch_size=4, num_passes=1, use_tta=True):
+def infer_stacked_ensemble(model, img, base_quality, tile, overlap, batch_size=4, num_passes=1, use_tta=True, progress_fn=None, log_fn=None):
     device = img.device
     avg_pred = torch.zeros_like(img)
     steps = get_auto_steps(base_quality)
     
     for i in range(num_passes):
+        if log_fn and num_passes > 1: log_fn(f"--- Ensemble Pass {i+1}/{num_passes} ---")
+        
         sq = max(1.0, min(100.0, base_quality + (torch.rand(1).item() * 2 - 1) * 2.0)) if num_passes > 1 else base_quality
         qt = torch.tensor([sq / 100.0], device=device)
         
@@ -182,7 +222,14 @@ def infer_stacked_ensemble(model, img, base_quality, tile, overlap, batch_size=4
         if fh: pi = torch.flip(pi, [3])
         if fv: pi = torch.flip(pi, [2])
 
-        p = infer_tiled_batched(model, pi, qt, steps, tile, overlap, batch_size)
+        def tile_progress(current_tile, total_tiles):
+            if progress_fn:
+                # Calculate global progress percentage combining passes and tiles
+                base_pct = (i / num_passes) * 100
+                pass_pct = (current_tile / total_tiles) * (100 / num_passes)
+                progress_fn(int(base_pct + pass_pct))
+
+        p = infer_tiled_batched(model, pi, qt, steps, tile, overlap, batch_size, progress_fn=tile_progress, log_fn=log_fn)
 
         if fv: p = torch.flip(p, [2])
         if fh: p = torch.flip(p, [3])
@@ -196,33 +243,30 @@ def run_inference(args: dict, progress_callback=None, log_callback=None):
     def log(msg): log_callback(msg) if log_callback else None
 
     try:
-        if progress_callback: progress_callback(10)
+        log(f"Initializing inference on {device.type.upper()}...")
+        if progress_callback: progress_callback(0)
         
         model, ckpt = load_model_for_inference(
             args["weights"], device, use_ema=args.get("use_ema", True), log_fn=log
         )
         
         log(f"Checkpoint Loaded (Step {ckpt.get('step', '?')})")
-        if progress_callback: progress_callback(20)
 
         img_t = pil_to_tensor(Image.open(args["input"])).unsqueeze(0).to(device)
         log(f"Image loaded: {img_t.shape[3]}x{img_t.shape[2]}")
-        if progress_callback: progress_callback(30)
 
         auto_steps = get_auto_steps(args.get("quality", 75))
         passes = args.get("passes", 1)
         use_tta = args.get("tta", True)
         
         log(f"Processing... (Steps: {auto_steps}, Passes: {passes}, TTA: {'Yes' if use_tta else 'No'})")
-        if progress_callback: progress_callback(50)
 
         p = infer_stacked_ensemble(
             model, img_t, float(args.get("quality", 75)), 
             args.get("tile", 0), args.get("overlap", 32), args.get("batch_size", 4),
-            num_passes=passes, use_tta=use_tta
+            num_passes=passes, use_tta=use_tta,
+            progress_fn=progress_callback, log_fn=log
         )
-
-        if progress_callback: progress_callback(90)
 
         out_path = args.get("output", "output.png")
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)

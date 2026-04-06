@@ -315,4 +315,30 @@ class InferenceGUI(QMainWindow):
             "use_ema": self.use_ema.isChecked(), "quality": self.quality.value(),
             "tile": self.tile_size.value() if self.use_tiling.isChecked() else 0,
             "overlap": self.overlap.value(), "batch_size": self.batch_size.value(),
-            "passes": self.passes.valu
+            "passes": self.passes.value(), "tta": self.use_tta.isChecked(),
+            "save_comparison": self.save_comparison.isChecked()
+        }
+
+        self.run_button.setEnabled(False)
+        self.progress.setValue(0)
+        self.log.clear()
+        self._log("Starting inference...")
+
+        self._worker = InferenceWorker(args)
+        self._worker.log_signal.connect(self._log)
+        self._worker.progress_signal.connect(self.progress.setValue)
+        self._worker.error_signal.connect(lambda e: self._log(f"Error: {e}"))
+        self._worker.finished_signal.connect(self._on_inference_finished)
+        self._worker.start()
+
+    def _on_inference_finished(self, result):
+        self.run_button.setEnabled(True)
+        if result:
+            self._result = result
+            self.src_preview.set_image(tensor_to_qpixmap(result["src"]))
+            self.pred_preview.set_image(tensor_to_qpixmap(result["pred"]))
+            self._toggle_comparison(self.comparison_check.isChecked())
+            self._log("Inference completed successfully.")
+            self.progress.setValue(100)
+        else:
+            self.progress.setValue(0)
