@@ -186,6 +186,7 @@ class InferenceGUI(QMainWindow):
         
         row = QHBoxLayout()
         self.ckpt_path = QLineEdit(); row.addWidget(self.ckpt_path, 1)
+        btn_ema = QPushButton("Load EMA Weights"); btn_ema.clicked.connect(self._load_ema_weights); row.addWidget(btn_ema)
         btn_brws = QPushButton("Browse"); btn_brws.clicked.connect(self._browse_ckpt); row.addWidget(btn_brws)
         btn_ref = QPushButton("Refresh"); btn_ref.clicked.connect(self._refresh_checkpoints); row.addWidget(btn_ref)
         m_lay.addLayout(row)
@@ -283,6 +284,21 @@ class InferenceGUI(QMainWindow):
     def _log(self, msg):
         self.log.append(msg)
         self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
+
+    def _load_ema_weights(self):
+        curr_path = self.ckpt_path.text()
+        if not curr_path:
+            return self._log("No checkpoint selected.")
+        
+        dir_path = os.path.dirname(curr_path)
+        ema_path = os.path.join(dir_path, "latest_ema.pt")
+        
+        if os.path.exists(ema_path):
+            self.ckpt_path.setText(ema_path)
+            self._update_ckpt_info(ema_path)
+            self._log(f"Switched to EMA weights: {ema_path}")
+        else:
+            self._log(f"Could not find EMA weights at {ema_path}")
 
     def _browse_ckpt(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select Checkpoint", self._last_dir, "PyTorch Checkpoint (*.pt);;All Files (*)")
