@@ -186,7 +186,7 @@ class InferenceGUI(QMainWindow):
         
         row = QHBoxLayout()
         self.ckpt_path = QLineEdit(); row.addWidget(self.ckpt_path, 1)
-        btn_ema = QPushButton("Load EMA Weights"); btn_ema.clicked.connect(self._load_ema_weights); row.addWidget(btn_ema)
+        self.btn_ema = QPushButton("Load EMA Weights"); self.btn_ema.clicked.connect(self._load_ema_weights); row.addWidget(self.btn_ema)
         btn_brws = QPushButton("Browse"); btn_brws.clicked.connect(self._browse_ckpt); row.addWidget(btn_brws)
         btn_ref = QPushButton("Refresh"); btn_ref.clicked.connect(self._refresh_checkpoints); row.addWidget(btn_ref)
         m_lay.addLayout(row)
@@ -341,10 +341,25 @@ class InferenceGUI(QMainWindow):
     def _update_ckpt_info(self, path):
         info = get_checkpoint_info(path)
         if info:
-            self.ckpt_info_label.setText(
-                f"Step: {info['step']} | Arch: {info['base_channels']}ch, {info['depth']}dp | EMA: {'Yes' if info['has_ema'] else 'No'}"
-            )
-            self.use_ema.setEnabled(info["has_ema"]); self.use_ema.setChecked(info["has_ema"])
+            is_ema_only = "ema" in os.path.basename(path).lower()
+            if is_ema_only:
+                self.ckpt_info_label.setText(
+                    f"Step: {info['step']} | Arch: {info['base_channels']}ch, {info['depth']}dp | Using EMA weights"
+                )
+                if hasattr(self, 'btn_ema'):
+                    self.btn_ema.setEnabled(False)
+                self.use_ema.setEnabled(False)
+                self.use_ema.setChecked(True)
+                self.use_ema.setText("Using EMA weights")
+            else:
+                self.ckpt_info_label.setText(
+                    f"Step: {info['step']} | Arch: {info['base_channels']}ch, {info['depth']}dp | EMA: {'Yes' if info['has_ema'] else 'No'}"
+                )
+                if hasattr(self, 'btn_ema'):
+                    self.btn_ema.setEnabled(True)
+                self.use_ema.setEnabled(info["has_ema"])
+                self.use_ema.setChecked(info["has_ema"])
+                self.use_ema.setText("Use EMA Weights (if available)")
 
     def _toggle_comparison(self, checked):
         if checked and self._result:
