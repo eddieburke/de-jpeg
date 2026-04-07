@@ -53,3 +53,48 @@ def make_comparison(original: torch.Tensor, restored: torch.Tensor) -> torch.Ten
     line_x = w
     canvas[:, :mh, max(0, line_x - 1) : min(mw, line_x + 1)] = 1.0
     return canvas
+
+def estimate_jpeg_quality(img_path: str) -> int:
+    """
+    Reverse-engineers the JPEG Quality Factor (0-100) by inspecting 
+    the luminance quantization table embedded within the file structure.
+    """
+    try:
+        with Image.open(img_path) as img:
+            if img.format != 'JPEG' or not getattr(img, 'quantization', None):
+                return None
+            
+            q = img.quantization.get(0)
+            if not q: return None
+            
+            # IJG standard luminance baseline Q-table for quality=50
+            std_q = [
+                16, 11, 10, 16, 24, 40, 51, 61,
+                12, 12, 14, 19, 26, 58, 60, 55,
+                14, 13, 16, 24, 40, 57, 69, 56,
+                14, 17, 22, 29, 51, 87, 80, 62,
+                18, 22, 37, 56, 68, 109, 103, 77,
+                24, 35, 55, 64, 81, 104, 113, 92,
+                49, 64, 78, 87, 103, 121, 120, 101,
+                72, 92, 95, 98, 112, 100, 103, 99
+            ]
+            
+            qualities = []
+            for i in range(64):
+                if std_q[i] == 0: continue
+                val = q[i]
+                
+                # Reverse scaling mapping relative to Q50
+                scale = (val * 100) / std_q[i]
+                if scale == 0: continue
+                
+                if scale <= 100:
+                    quality = 100 - scale / 2.0
+                else:
+                    quality = 5000.0 / scale
+                qualities.append(quality)
+                
+            if not qualities: return None
+            return max(1, min(100, int(sum(qualities)/len(qualities))))
+    except Exception:
+        return None

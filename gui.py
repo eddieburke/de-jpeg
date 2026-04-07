@@ -21,6 +21,7 @@ from utils import tensor_to_pil, make_comparison
 class InferenceWorker(QThread):
     log_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(int)
+    batch_progress_signal = pyqtSignal(int)
     finished_signal = pyqtSignal(object)
     error_signal = pyqtSignal(str)
 
@@ -33,6 +34,7 @@ class InferenceWorker(QThread):
             result = run_inference(
                 self.args,
                 progress_callback=lambda v: self.progress_signal.emit(v),
+                batch_progress_callback=lambda v: self.batch_progress_signal.emit(v),
                 log_callback=lambda m: self.log_signal.emit(m),
             )
             self.finished_signal.emit(result)
@@ -144,7 +146,7 @@ class InferenceGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Unified JPEG Restorer — Inference")
-        self.setMinimumSize(1200, 750)
+        self.setMinimumSize(1200, 800)
         self.setStyleSheet(self._get_stylesheet())
 
         self._worker = self._scan_worker = self._result = None
@@ -200,24 +202,40 @@ class InferenceGUI(QMainWindow):
 
         # I/O Group
         ig = QGroupBox("Input / Output"); i_lay = QVBoxLayout(ig)
-        row = QHBoxLayout(); self.input_path = QLineEdit()
-        btn_in = QPushButton("Browse"); btn_in.clicked.connect(self._browse_input)
-        row.addWidget(self.input_path, 1); row.addWidget(btn_in); i_lay.addWidget(QLabel("Input Image:")); i_lay.addLayout(row)
         
-        row = QHBoxLayout(); self.output_dir = QLineEdit(self._output_dir)
+        row_in = QHBoxLayout(); self.input_path = QLineEdit()
+        btn_in_file = QPushButton("File"); btn_in_file.clicked.connect(self._browse_input_file)
+        btn_in_folder = QPushButton("Folder"); btn_in_folder.clicked.connect(self._browse_input_folder)
+        row_in.addWidget(self.input_path, 1)
+        row_in.addWidget(btn_in_file)
+        row_in.addWidget(btn_in_folder)
+        i_lay.addWidget(QLabel("Input Path (File or Folder):")); i_lay.addLayout(row_in)
+        
+        row_out = QHBoxLayout(); self.output_dir = QLineEdit(self._output_dir)
         btn_out = QPushButton("Browse"); btn_out.clicked.connect(self._browse_output)
-        row.addWidget(self.output_dir, 1); row.addWidget(btn_out); i_lay.addWidget(QLabel("Output Folder:")); i_lay.addLayout(row)
+        row_out.addWidget(self.output_dir, 1); row_out.addWidget(btn_out)
+        i_lay.addWidget(QLabel("Output Folder:")); i_lay.addLayout(row_out)
         
         self.output_name = QLineEdit("restored.png")
-        i_lay.addWidget(QLabel("Output filename:")); i_lay.addWidget(self.output_name)
+        i_lay.addWidget(QLabel("Output filename (Ignored if batch processing folder):")); i_lay.addWidget(self.output_name)
         layout.addWidget(ig)
 
         # Settings Group
         sg = QGroupBox("Restoration Settings"); s_lay = QVBoxLayout(sg)
-        self.quality = SliderSpinBox("Target Quality:", 1, 100, 75)
-        self.passes = SliderSpinBox("Ensemble Passes:", 1, 8, 1)
-        s_lay.addWidget(self.quality); s_lay.addWidget(self.passes)
         
+        self.auto_quality = QCheckBox("Auto-detect JPEG Quality from Input File(s)")
+        self.auto_quality.setChecked(True)
+        s_lay.addWidget(self.auto_quality)
+
+        self.quality = SliderSpinBox("Target Quality:", 1, 100, 75)
+        self.quality.setEnabled(False) # Because auto is checked by default
+        self.auto_quality.toggled.connect(lambda checked: self.quality.setEnabled(not checked))
+        
+        self.steps = SliderSpinBox("Steps:", 1, 50, 20)
+        self.passes = SliderSpinBox("Ensemble Passes:", 1, 8, 1)
+        s_lay.addWidget(self.quality); s_lay.addWidget(self.steps); s_lay.addWidget(self.passes)
+        
+
         self.use_tta = QCheckBox("Use Test-Time Augmentation (TTA)"); self.use_tta.setChecked(True); s_lay.addWidget(self.use_tta)
         self.save_comparison = QCheckBox("Save Comparison Image"); s_lay.addWidget(self.save_comparison)
         layout.addWidget(sg)
@@ -236,7 +254,11 @@ class InferenceGUI(QMainWindow):
         self.run_button.clicked.connect(self._run)
         layout.addWidget(self.run_button)
 
-        self.progress = QProgressBar(); self.progress.setRange(0, 100); layout.addWidget(self.progress)
+        self.batch_progress = QProgressBar(); self.batch_progress.setRange(0, 100); self.batch_progress.setFormat("Batch Progress: %p%")
+        self.progress = QProgressBar(); self.progress.setRange(0, 100); self.progress.setFormat("Image Progress: %p%")
+        layout.addWidget(self.batch_progress)
+        layout.addWidget(self.progress)
+        
         self.log = QTextEdit(); self.log.setReadOnly(True); self.log.setMaximumHeight(140); layout.addWidget(self.log)
 
         layout.addStretch(); scroll.setWidget(panel)
@@ -266,11 +288,20 @@ class InferenceGUI(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Select Checkpoint", self._last_dir, "PyTorch Checkpoint (*.pt);;All Files (*)")
         if path: self.ckpt_path.setText(path); self._last_dir = str(Path(path).parent); self._update_ckpt_info(path)
 
-    def _browse_input(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select Image", self._last_dir, "Images (*.jpg *.jpeg *.png *.webp);;All Files (*)")
+    def _browse_input_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select Image File", self._last_dir, "Images (*.jpg *.jpeg *.png *.webp);;All Files (*)")
         if path:
-            self.input_path.setText(path); self._last_dir = str(Path(path).parent); self.output_dir.setText(self._last_dir)
+            self.input_path.setText(path)
+            self._last_dir = str(Path(path).parent)
+            self.output_dir.setText(self._last_dir)
             self.output_name.setText(f"{Path(path).stem}_restored.png")
+
+    def _browse_input_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "Select Input Folder for Batch Process", self._last_dir)
+        if path:
+            self.input_path.setText(path)
+            self._last_dir = path
+            self.output_dir.setText(os.path.join(path, "restored"))
 
     def _browse_output(self):
         path = QFileDialog.getExistingDirectory(self, "Select Output Folder", self.output_dir.text())
@@ -307,26 +338,35 @@ class InferenceGUI(QMainWindow):
 
     def _run(self):
         if not os.path.isfile(self.ckpt_path.text()): return self._log("Error: Invalid checkpoint.")
-        if not os.path.isfile(self.input_path.text()): return self._log("Error: Invalid image.")
+        if not os.path.exists(self.input_path.text()): return self._log("Error: Invalid input path.")
 
         args = {
-            "weights": self.ckpt_path.text(), "input": self.input_path.text(),
-            "output": os.path.join(self.output_dir.text(), self.output_name.text()),
-            "use_ema": self.use_ema.isChecked(), "quality": self.quality.value(),
+            "weights": self.ckpt_path.text(), 
+            "input": self.input_path.text(),
+            "output_dir": self.output_dir.text(),
+            "output_name": self.output_name.text(),
+            "use_ema": self.use_ema.isChecked(), 
+            "quality": self.quality.value(),
+            "auto_quality": self.auto_quality.isChecked(),
+            "steps": self.steps.value(),
             "tile": self.tile_size.value() if self.use_tiling.isChecked() else 0,
-            "overlap": self.overlap.value(), "batch_size": self.batch_size.value(),
-            "passes": self.passes.value(), "tta": self.use_tta.isChecked(),
+            "overlap": self.overlap.value(), 
+            "batch_size": self.batch_size.value(),
+            "passes": self.passes.value(), 
+            "tta": self.use_tta.isChecked(),
             "save_comparison": self.save_comparison.isChecked()
         }
 
         self.run_button.setEnabled(False)
         self.progress.setValue(0)
+        self.batch_progress.setValue(0)
         self.log.clear()
         self._log("Starting inference...")
 
         self._worker = InferenceWorker(args)
         self._worker.log_signal.connect(self._log)
         self._worker.progress_signal.connect(self.progress.setValue)
+        self._worker.batch_progress_signal.connect(self.batch_progress.setValue)
         self._worker.error_signal.connect(lambda e: self._log(f"Error: {e}"))
         self._worker.finished_signal.connect(self._on_inference_finished)
         self._worker.start()
@@ -340,5 +380,7 @@ class InferenceGUI(QMainWindow):
             self._toggle_comparison(self.comparison_check.isChecked())
             self._log("Inference completed successfully.")
             self.progress.setValue(100)
+            self.batch_progress.setValue(100)
         else:
             self.progress.setValue(0)
+            self.batch_progress.setValue(0)
