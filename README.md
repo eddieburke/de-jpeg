@@ -1,7 +1,16 @@
 # JPEG Restorer - Diffusion-based Image Enhancement
 
-A GUI application for restoring JPEG-compressed images using a diffusion model approach. The tool reduces compression artifacts and enhances image quality through iterative denoising steps.
+A PyQt6 GUI application for restoring JPEG-compressed images using an EDM diffusion model. Reduces compression artifacts and enhances image quality through iterative denoising with quality conditioning.
 
+## Features
+
+- **GUI Interface**: Full PyQt6-based application with live preview
+- **Batch Processing**: Process individual files or entire folders
+- **Auto Quality Detection**: Automatically detects JPEG quality from input files
+- **Tiled Inference**: Memory-efficient processing for large images
+- **Test-Time Augmentation (TTA)**: Optional horizontal/vertical flipping for improved results
+- **Ensemble Passes**: Multiple restoration passes with quality jitter for better output
+- **EMA Weight Support**: Optional exponential moving average weights from training
 
 ## Installation
 
@@ -20,57 +29,60 @@ A GUI application for restoring JPEG-compressed images using a diffusion model a
 
 1. Launch the application:
    ```bash
+   python main.py
+   ```
+   Or use the provided script:
+   ```bash
    run.bat
    ```
 
-2. Click "Run Inference" to process your image
-3. Monitor progress in the log and view results in the preview panels
+2. Select a model checkpoint (auto-scans `./runs` and parent directories)
+3. Choose input file(s) or folder for batch processing
+4. Configure settings (quality, tile size, passes, TTA, etc.)
+5. Click "Run Inference" to process
+6. View results in the preview panels
 
 ## Model Checkpoints
 
-The application looks for `.pt` checkpoint files in:
+The application automatically scans for `.pt` checkpoint files in:
 - Current directory
 - `./runs` subdirectory
 - Parent directory's `./runs` folder
 
-Checkpoints should contain:
-- Model state dictionary
-- Model configuration (base_channels, emb_dim, depth)
-- Training arguments
-- Optional EMA weights
+## Settings
+
+| Setting | Description |
+|---------|-------------|
+| Quality | Target quality for restoration (0-100) |
+| Tile Size | Image tile size for memory-efficient processing (0 = disabled) |
+| Overlap | Tile overlap for blending (default: 32) |
+| Batch Size | Number of tiles processed simultaneously |
+| Passes | Number of ensemble passes with quality jitter |
+| TTA | Enable test-time augmentation (flipping) |
+| Use EMA | Use exponential moving average weights |
 
 ## Output
 
-- Restored image saved as specified filename
-- Optional comparison image (`*_comparison.ext`) showing original vs restored
-- Gate map visualization available in GUI showing artifact regions
+- Restored image saved to the specified output folder
+- Original filename preserved with `_restored` suffix when batch processing
 
 ## Technical Details
 
 The restoration process uses:
-- U-Net architecture with residual blocks
-- Time and quality conditioning
-- Diffusion sampling with configurable steps
-- Tiled processing for large images
-- Stacking averaging with quality jitter
-- Optional augmentation via flipping (TTA)
-  
-## Recommended Settings
-- Steps: 4-8
-- Noise 0.4-0.5
+- **EDM (Elucidating the Design Space of Diffusion Models)**: Sampler with quality conditioning
+- **U-Net Architecture**: Residual blocks with time and quality embeddings
+- **Tiled Processing**: Splits large images into tiles for memory efficiency
+- **Ensemble Averaging**: Multiple passes with small quality variations
+- **Test-Time Augmentation**: Horizontal and vertical flips averaged for better results
 
 ## Requirements
 
-See `requirements.txt` for exact versions, but core dependencies include:
-- PyTorch
-- Torchvision
-- Pillow
+Core dependencies (see `requirements.txt` for exact versions):
+- PyTorch 2.0+
 - PyQt6
+- Pillow
 - NumPy
 
 ## License
 
 This project is provided as-is for educational and experimental purposes.
-```
-
-To update the README, you'll need to copy this content into your README.md file manually, as I'm currently unable to make file modifications due to the read-only constraint.
